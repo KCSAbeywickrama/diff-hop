@@ -286,7 +286,7 @@ class DiffHopController {
 
     try {
       const title = this.formatDiffTitle(fileUri, this.shortRef(parent), rightRef);
-      await vscode.commands.executeCommand("vscode.diff", parentLeft, right, title, { preview: false });
+      await vscode.commands.executeCommand("vscode.diff", parentLeft, right, title, this.getDiffOpenOptions());
       return "opened";
     } catch (error) {
       if (!this.isFileNotFoundError(error)) {
@@ -305,7 +305,7 @@ class DiffHopController {
 
     const left = this.gitApi.toGitUri(fileUri, "HEAD");
     const title = this.formatDiffTitle(fileUri, "HEAD", "working tree");
-    await vscode.commands.executeCommand("vscode.diff", left, fileUri, title, { preview: false });
+    await vscode.commands.executeCommand("vscode.diff", left, fileUri, title, this.getDiffOpenOptions());
   }
 
   private async createContextFromActiveDiff(): Promise<DiffContext | undefined> {
@@ -814,6 +814,14 @@ class DiffHopController {
 
   private formatDiffTitle(fileUri: vscode.Uri, left: string, right: string): string {
     return `Diff Hop: ${path.basename(fileUri.fsPath)} (${left} \u2194 ${right})`;
+  }
+
+  private getDiffOpenOptions(): vscode.TextDocumentShowOptions {
+    return {
+      preview: true,
+      preserveFocus: false,
+      viewColumn: vscode.window.activeTextEditor?.viewColumn
+    };
   }
 
   private async updateContextKeys(active: boolean, canPrev: boolean, canNext: boolean): Promise<void> {
