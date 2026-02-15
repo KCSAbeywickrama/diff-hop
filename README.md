@@ -30,13 +30,15 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 - The extension detects Git diff context from active diff tabs (`git:` URIs).
 - It resolves the correct repository in multi-root workspaces using `api.getRepository(fileUri)`.
 - It reads commit history for that file (`repo.log`) with a small 10-second cache.
+- At path-history boundaries, it can lazily extend history across renames via `git log --follow` after explicit confirmation.
 - Navigation opens diffs via `vscode.diff` + `api.toGitUri`.
 
 ## Limitations (MVP)
 
-- File renames across history are not tracked.
+- Rename tracking is lazy and opt-in (only when requested at a boundary).
 - Works only for Git-backed file resources.
 - Requires VS Code built-in Git extension (`vscode.git`) to be enabled.
+- Lazy rename extension requires local `git` CLI availability.
 
 ## Manual Test Checklist
 
@@ -64,9 +66,10 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 - Confirm navigation uses repo B history.
 
 5. Boundary conditions
-- At oldest commit: previous action does nothing and does not crash.
+- At oldest path-history boundary: prompt offers `Extend Across Renames`; dismiss keeps current boundary.
+- If rename-extension adds no commits: friendly message is shown and no crash occurs.
 - At newest working-tree position: next action does nothing and does not crash.
-- Root commit: empty-left fallback opens without crashing.
+- At comparable-history beginning: previous action stops and does not crash.
 
 6. Git disabled
 - Disable built-in Git extension.

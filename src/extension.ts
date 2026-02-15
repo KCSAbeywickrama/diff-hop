@@ -1,15 +1,19 @@
 import * as path from "path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
 import type { API, Commit, GitExtension, Repository } from "./git";
 
 type Direction = "previous" | "next";
 type ContextMode = "commit-vs-commit" | "commit-vs-working";
 type OpenCommitDiffResult = "opened" | "no-left-side" | "error";
+type HistorySource = "path" | "follow";
 
 interface DiffContext {
   fileUri: vscode.Uri;
   repoRoot: string;
   repo: Repository;
+  history: HistoryCursor;
   mode: ContextMode;
   currentCommitHash?: string;
   commits: Commit[];
@@ -28,14 +32,31 @@ interface CacheEntry {
   commits: Commit[];
 }
 
+interface HistoryCursor {
+  commits: Commit[];
+  source: HistorySource;
+  canExtendAcrossRenames: boolean;
+}
+
+interface FollowCacheEntry {
+  commits: Commit[];
+  pathsByHash: Record<string, string>;
+  ts: number;
+}
+
 const CACHE_TTL_MS = 10_000;
 const MAX_LOG_ENTRIES = 200;
 const REF_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
+const EXTEND_RENAMES_ACTION = "Extend Across Renames";
+const execFileAsync = promisify(execFile);
 
 class DiffHopController {
   private readonly disposables: vscode.Disposable[] = [];
   private refreshTimer: NodeJS.Timeout | undefined;
   private readonly logCache = new Map<string, CacheEntry>();
+  private readonly followCache = new Map<string, FollowCacheEntry>();
+  private readonly followPromptShown = new Set<string>();
+  private readonly followInFlight = new Set<string>();
   private gitApi: API | undefined;
   private gitUnavailableNotified = false;
   private currentContext: DiffContext | undefined;
@@ -126,7 +147,7 @@ class DiffHopController {
     }
 
     if (direction === "previous" && !context.canPrev) {
-      void vscode.window.showInformationMessage("Diff Hop: reached the beginning of history for this file.");
+      await this.maybeOfferFollowAndRetry(context);
       return;
     }
 
@@ -138,7 +159,7 @@ class DiffHopController {
     const target = this.resolveTargetIndex(context, direction);
     if (target === undefined) {
       if (direction === "previous") {
-        void vscode.window.showInformationMessage("Diff Hop: reached the beginning of history for this file.");
+        await this.maybeOfferFollowAndRetry(context);
       } else {
         void vscode.window.showInformationMessage("Diff Hop: reached the newest side of history for this file.");
       }
@@ -152,9 +173,9 @@ class DiffHopController {
       if (!targetCommit) {
         return;
       }
-      const result = await this.openCommitDiff(context.fileUri, targetCommit);
+      const result = await this.openCommitDiff(context.fileUri, targetCommit, context.repoRoot);
       if (result === "no-left-side") {
-        void vscode.window.showInformationMessage("Diff Hop: reached the beginning of comparable history for this file.");
+        await this.maybeOfferFollowAndRetry(context);
         return;
       }
 
@@ -164,6 +185,72 @@ class DiffHopController {
     }
 
     await this.refreshContext();
+  }
+
+  private async maybeOfferFollowAndRetry(context: DiffContext): Promise<void> {
+    if (context.mode !== "commit-vs-commit" && context.mode !== "commit-vs-working") {
+      return;
+    }
+
+    const cacheKey = this.getContextKey(context.repoRoot, context.fileUri);
+    let extendedCommits = this.followCache.get(cacheKey)?.commits;
+
+    if (!extendedCommits) {
+      if (this.followPromptShown.has(cacheKey)) {
+        return;
+      }
+
+      this.followPromptShown.add(cacheKey);
+      try {
+        const action = await vscode.window.showInformationMessage(
+          "Diff Hop: Reached path history boundary. Extend across renames?",
+          EXTEND_RENAMES_ACTION
+        );
+        if (action !== EXTEND_RENAMES_ACTION) {
+          return;
+        }
+      } finally {
+        this.followPromptShown.delete(cacheKey);
+      }
+
+      extendedCommits = await this.extendHistoryAcrossRenames(context);
+      if (!extendedCommits) {
+        return;
+      }
+    }
+
+    if (extendedCommits.length <= context.commits.length) {
+      void vscode.window.showInformationMessage("Diff Hop: No additional history found across renames.");
+      return;
+    }
+
+    const applied = this.applyExtendedHistoryToContext(context, extendedCommits);
+    if (!applied || !context.canPrev) {
+      void vscode.window.showInformationMessage("Diff Hop: reached the beginning of history for this file.");
+      return;
+    }
+
+    const nextTarget = this.resolveTargetIndex(context, "previous");
+    if (nextTarget === undefined || nextTarget === -1) {
+      void vscode.window.showInformationMessage("Diff Hop: reached the beginning of history for this file.");
+      return;
+    }
+
+    const nextCommit = context.commits[nextTarget];
+    if (!nextCommit) {
+      return;
+    }
+
+    const result = await this.openCommitDiff(context.fileUri, nextCommit, context.repoRoot);
+    if (result === "opened") {
+      await this.refreshContext();
+      return;
+    }
+
+    if (result === "no-left-side") {
+      void vscode.window.showInformationMessage("Diff Hop: reached the beginning of comparable history for this file.");
+      return;
+    }
   }
 
   private resolveTargetIndex(context: DiffContext, direction: Direction): number | undefined {
@@ -185,12 +272,13 @@ class DiffHopController {
     return this.isWorkingTreeAnchored(context) ? -1 : undefined;
   }
 
-  private async openCommitDiff(fileUri: vscode.Uri, commit: Commit): Promise<OpenCommitDiffResult> {
+  private async openCommitDiff(fileUri: vscode.Uri, commit: Commit, repoRoot?: string): Promise<OpenCommitDiffResult> {
     if (!this.gitApi) {
       return "error";
     }
 
-    const right = this.gitApi.toGitUri(fileUri, commit.hash);
+    const rightFileUri = this.resolveFileUriForCommit(repoRoot, fileUri, commit.hash);
+    const right = this.gitApi.toGitUri(rightFileUri, commit.hash);
     const parent = commit.parents[0];
     const rightRef = this.shortRef(commit.hash);
 
@@ -198,7 +286,8 @@ class DiffHopController {
       return "no-left-side";
     }
 
-    const parentLeft = this.gitApi.toGitUri(fileUri, parent);
+    const parentFileUri = this.resolveFileUriForCommit(repoRoot, fileUri, parent);
+    const parentLeft = this.gitApi.toGitUri(parentFileUri, parent);
 
     try {
       await vscode.workspace.openTextDocument(parentLeft);
@@ -276,6 +365,11 @@ class DiffHopController {
       fileUri,
       repoRoot,
       repo,
+      history: {
+        commits,
+        source: "path",
+        canExtendAcrossRenames: true
+      },
       mode,
       currentCommitHash: currentRef,
       commits,
@@ -312,6 +406,11 @@ class DiffHopController {
       fileUri: activeUri,
       repoRoot: repo.rootUri.fsPath,
       repo,
+      history: {
+        commits,
+        source: "path",
+        canExtendAcrossRenames: true
+      },
       mode: "commit-vs-working",
       currentCommitHash: "HEAD",
       commits,
@@ -497,6 +596,204 @@ class DiffHopController {
 
   private getContextKey(repoRoot: string, fileUri: vscode.Uri): string {
     return `${repoRoot}|${fileUri.fsPath}`;
+  }
+
+  private applyExtendedHistoryToContext(context: DiffContext, commits: Commit[]): boolean {
+    context.commits = commits;
+    context.history = {
+      commits,
+      source: "follow",
+      canExtendAcrossRenames: false
+    };
+
+    const currentIndex = this.resolveCurrentIndex(context.mode, context.currentCommitHash, commits);
+    if (currentIndex === undefined) {
+      return false;
+    }
+
+    context.currentIndex = currentIndex;
+    context.canPrev = this.computeCanPrev(context);
+    context.canNext = this.computeCanNext(context);
+    return true;
+  }
+
+  private async extendHistoryAcrossRenames(context: DiffContext): Promise<Commit[] | undefined> {
+    const cacheKey = this.getContextKey(context.repoRoot, context.fileUri);
+    const cached = this.followCache.get(cacheKey);
+    if (cached) {
+      return cached.commits;
+    }
+
+    if (this.followInFlight.has(cacheKey)) {
+      return undefined;
+    }
+
+    this.followInFlight.add(cacheKey);
+    try {
+      const relativePath = this.getRepoRelativePath(context.repoRoot, context.fileUri.fsPath);
+      const followOutput = await this.runGitFollowLog(context.repoRoot, relativePath);
+      const parsedFollow = this.parseFollowLog(followOutput, relativePath, context.repoRoot);
+      const followHashes = parsedFollow.hashes;
+      if (followHashes.length === 0) {
+        this.followCache.set(cacheKey, { commits: context.commits, pathsByHash: {}, ts: Date.now() });
+        return context.commits;
+      }
+
+      const mergedCommits = await this.mergeFollowCommits(context.commits, followHashes, context.repoRoot);
+      const mergedPaths = this.buildMergedPathMap(mergedCommits, parsedFollow.pathsByHash);
+      this.followCache.set(cacheKey, { commits: mergedCommits, pathsByHash: mergedPaths, ts: Date.now() });
+      return mergedCommits;
+    } catch {
+      void vscode.window.showInformationMessage("Diff Hop: Unable to extend history across renames.");
+      return undefined;
+    } finally {
+      this.followInFlight.delete(cacheKey);
+    }
+  }
+
+  private async mergeFollowCommits(existing: Commit[], followHashes: string[], repoRoot: string): Promise<Commit[]> {
+    const existingByHash = new Map(existing.map((commit) => [commit.hash, commit]));
+    const merged = [...existing];
+    const seen = new Set(existingByHash.keys());
+    const oldestExisting = existing[existing.length - 1]?.hash;
+    const startIndex = oldestExisting ? followHashes.indexOf(oldestExisting) + 1 : 0;
+    const candidates = startIndex > 0 ? followHashes.slice(startIndex) : followHashes;
+
+    for (const hash of candidates) {
+      if (merged.length >= MAX_LOG_ENTRIES) {
+        break;
+      }
+
+      if (seen.has(hash)) {
+        continue;
+      }
+
+      const known = existingByHash.get(hash);
+      if (known) {
+        merged.push(known);
+        seen.add(hash);
+        continue;
+      }
+
+      const parents = await this.runGitParents(repoRoot, hash);
+      merged.push({ hash, parents });
+      seen.add(hash);
+    }
+
+    return merged;
+  }
+
+  private getRepoRelativePath(repoRoot: string, fileFsPath: string): string {
+    const relative = path.relative(repoRoot, fileFsPath);
+    return relative.split(path.sep).join("/");
+  }
+
+  private resolveFileUriForCommit(repoRoot: string | undefined, fallbackFileUri: vscode.Uri, hash: string): vscode.Uri {
+    if (!repoRoot) {
+      return fallbackFileUri;
+    }
+
+    const cacheKey = this.getContextKey(repoRoot, fallbackFileUri);
+    const mappedPath = this.followCache.get(cacheKey)?.pathsByHash[hash];
+    if (!mappedPath) {
+      return fallbackFileUri;
+    }
+
+    return vscode.Uri.file(mappedPath);
+  }
+
+  private async runGitFollowLog(repoRoot: string, relativePath: string): Promise<string> {
+    const { stdout } = await execFileAsync("git", [
+      "-C",
+      repoRoot,
+      "log",
+      "--follow",
+      "--name-status",
+      "--format=%H",
+      "--",
+      relativePath
+    ]);
+    return stdout;
+  }
+
+  private parseFollowLog(
+    output: string,
+    relativePath: string,
+    repoRoot: string
+  ): { hashes: string[]; pathsByHash: Record<string, string> } {
+    const hashes: string[] = [];
+    const pathsByHash: Record<string, string> = {};
+    const seen = new Set<string>();
+    let currentPath = this.normalizeRepoRelativePath(relativePath);
+    let currentHash: string | undefined;
+
+    for (const rawLine of output.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+
+      if (/^[0-9a-f]{40}$/i.test(line)) {
+        currentHash = line;
+        if (!seen.has(line)) {
+          seen.add(line);
+          hashes.push(line);
+          pathsByHash[line] = this.repoRelativeToAbsolutePath(repoRoot, currentPath);
+        }
+        continue;
+      }
+
+      if (!currentHash) {
+        continue;
+      }
+
+      const parts = line.split("\t");
+      if (parts.length < 2) {
+        continue;
+      }
+
+      const status = parts[0];
+      if (status.startsWith("R") && parts.length >= 3) {
+        const oldPath = this.normalizeRepoRelativePath(parts[1]);
+        const newPath = this.normalizeRepoRelativePath(parts[2]);
+        if (newPath === currentPath) {
+          currentPath = oldPath;
+        }
+      }
+    }
+
+    return { hashes, pathsByHash };
+  }
+
+  private buildMergedPathMap(commits: Commit[], parsedMap: Record<string, string>): Record<string, string> {
+    const mergedMap: Record<string, string> = {};
+    for (const commit of commits) {
+      const mappedPath = parsedMap[commit.hash];
+      if (mappedPath) {
+        mergedMap[commit.hash] = mappedPath;
+      }
+    }
+
+    return mergedMap;
+  }
+
+  private normalizeRepoRelativePath(relativePath: string): string {
+    return relativePath.split(path.sep).join("/");
+  }
+
+  private repoRelativeToAbsolutePath(repoRoot: string, relativePath: string): string {
+    return path.join(repoRoot, ...relativePath.split("/"));
+  }
+
+  private async runGitParents(repoRoot: string, hash: string): Promise<string[]> {
+    const { stdout } = await execFileAsync("git", ["-C", repoRoot, "rev-list", "--parents", "-n", "1", hash]);
+    const line = stdout.trim().split(/\r?\n/)[0] ?? "";
+    const parts = line.trim().split(/\s+/);
+    if (parts.length <= 1) {
+      return [];
+    }
+
+    return parts.slice(1);
   }
 
   private shortRef(ref: string): string {

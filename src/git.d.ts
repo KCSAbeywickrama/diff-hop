@@ -7,6 +7,12 @@ export interface Commit {
 
 export interface Repository {
   readonly rootUri: vscode.Uri;
+  readonly state?: {
+    readonly HEAD?: {
+      readonly name?: string;
+      readonly commit?: string;
+    };
+  };
   log(options?: { path?: string; maxEntries?: number }): Promise<Commit[]>;
 }
 
