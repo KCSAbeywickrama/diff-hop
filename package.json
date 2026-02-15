@@ -21,23 +21,25 @@
     "commands": [
       {
         "command": "diffHop.previousCommit",
-        "title": "◀ Git: Previous Commit (Diff Hop)"
+        "title": "Git: Previous Commit (Diff Hop)",
+        "icon": "$(arrow-left)"
       },
       {
         "command": "diffHop.nextCommit",
-        "title": "▶ Git: Next Commit (Diff Hop)"
+        "title": "Git: Next Commit (Diff Hop)",
+        "icon": "$(arrow-right)"
       }
     ],
     "menus": {
       "editor/title": [
         {
           "command": "diffHop.previousCommit",
-          "group": "navigation@10",
+          "group": "navigation@9",
           "when": "resourceScheme == git && diffHop.active && diffHop.canPrev"
         },
         {
           "command": "diffHop.nextCommit",
-          "group": "navigation@11",
+          "group": "navigation@10",
           "when": "resourceScheme == git && diffHop.active && diffHop.canNext"
         }
       ]
