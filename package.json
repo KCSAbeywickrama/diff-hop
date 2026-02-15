@@ -1,0 +1,57 @@
+{
+  "name": "diff-hop",
+  "displayName": "Diff Hop",
+  "description": "Lightweight commit-to-commit diff navigation for VS Code Git diffs.",
+  "version": "0.0.1",
+  "publisher": "chamoda",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onCommand:diffHop.previousCommit",
+    "onCommand:diffHop.nextCommit",
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "diffHop.previousCommit",
+        "title": "◀ Git: Previous Commit (Diff Hop)"
+      },
+      {
+        "command": "diffHop.nextCommit",
+        "title": "▶ Git: Next Commit (Diff Hop)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "diffHop.previousCommit",
+          "group": "navigation@10",
+          "when": "resourceScheme == git && diffHop.active && diffHop.canPrev"
+        },
+        {
+          "command": "diffHop.nextCommit",
+          "group": "navigation@11",
+          "when": "resourceScheme == git && diffHop.active && diffHop.canNext"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.19",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.2",
+    "typescript": "^5.4.2"
+  }
+}
