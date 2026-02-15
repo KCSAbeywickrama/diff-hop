@@ -35,12 +35,12 @@
         {
           "command": "diffHop.previousCommit",
           "group": "navigation@9",
-          "when": "resourceScheme == git && diffHop.active && diffHop.canPrev"
+          "when": "resourceScheme == git && diffHop.active"
         },
         {
           "command": "diffHop.nextCommit",
           "group": "navigation@10",
-          "when": "resourceScheme == git && diffHop.active && diffHop.canNext"
+          "when": "resourceScheme == git && diffHop.active"
         }
       ]
     }

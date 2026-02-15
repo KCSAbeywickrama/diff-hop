@@ -124,12 +124,23 @@ class DiffHopController {
       this.workingTreeAnchorKey = this.getContextKey(context.repoRoot, context.fileUri);
     }
 
-    if ((direction === "previous" && !context.canPrev) || (direction === "next" && !context.canNext)) {
+    if (direction === "previous" && !context.canPrev) {
+      void vscode.window.showInformationMessage("Diff Hop: reached the beginning of history for this file.");
+      return;
+    }
+
+    if (direction === "next" && !context.canNext) {
+      void vscode.window.showInformationMessage("Diff Hop: reached the newest side of history for this file.");
       return;
     }
 
     const target = this.resolveTargetIndex(context, direction);
     if (target === undefined) {
+      if (direction === "previous") {
+        void vscode.window.showInformationMessage("Diff Hop: reached the beginning of history for this file.");
+      } else {
+        void vscode.window.showInformationMessage("Diff Hop: reached the newest side of history for this file.");
+      }
       return;
     }
 
@@ -140,7 +151,10 @@ class DiffHopController {
       if (!targetCommit) {
         return;
       }
-      await this.openCommitDiff(context.fileUri, targetCommit);
+      const opened = await this.openCommitDiff(context.fileUri, targetCommit);
+      if (!opened) {
+        return;
+      }
     }
 
     await this.refreshContext();
@@ -165,21 +179,54 @@ class DiffHopController {
     return this.isWorkingTreeAnchored(context) ? -1 : undefined;
   }
 
-  private async openCommitDiff(fileUri: vscode.Uri, commit: Commit): Promise<void> {
+  private async openCommitDiff(fileUri: vscode.Uri, commit: Commit): Promise<boolean> {
     if (!this.gitApi) {
-      return;
+      return false;
     }
 
     const right = this.gitApi.toGitUri(fileUri, commit.hash);
     const parent = commit.parents[0];
-    const left = parent
-      ? this.gitApi.toGitUri(fileUri, parent)
-      : await this.createEmptyUri();
-    const leftRef = parent ? this.shortRef(parent) : "empty";
     const rightRef = this.shortRef(commit.hash);
-    const title = this.formatDiffTitle(fileUri, leftRef, rightRef);
 
-    await vscode.commands.executeCommand("vscode.diff", left, right, title, { preview: false });
+    if (!parent) {
+      const left = await this.createEmptyUri();
+      const title = this.formatDiffTitle(fileUri, "empty", rightRef);
+      await vscode.commands.executeCommand("vscode.diff", left, right, title, { preview: false });
+      return true;
+    }
+
+    const parentLeft = this.gitApi.toGitUri(fileUri, parent);
+
+    try {
+      await vscode.workspace.openTextDocument(parentLeft);
+    } catch {
+      const left = await this.createEmptyUri();
+      const title = this.formatDiffTitle(fileUri, "empty", rightRef);
+      await vscode.commands.executeCommand("vscode.diff", left, right, title, { preview: false });
+      return true;
+    }
+
+    try {
+      const title = this.formatDiffTitle(fileUri, this.shortRef(parent), rightRef);
+      await vscode.commands.executeCommand("vscode.diff", parentLeft, right, title, { preview: false });
+      return true;
+    } catch (error) {
+      if (!this.isFileNotFoundError(error)) {
+        void vscode.window.showInformationMessage("Diff Hop: unable to open commit diff.");
+        return false;
+      }
+    }
+
+    // File may not exist in parent at this path (e.g., added file/rename); fall back to empty left side.
+    try {
+      const left = await this.createEmptyUri();
+      const title = this.formatDiffTitle(fileUri, "empty", rightRef);
+      await vscode.commands.executeCommand("vscode.diff", left, right, title, { preview: false });
+      return true;
+    } catch {
+      void vscode.window.showInformationMessage("Diff Hop: unable to open older commit for this file.");
+      return false;
+    }
   }
 
   private async openWorkingTreeDiff(fileUri: vscode.Uri): Promise<void> {
@@ -468,6 +515,20 @@ class DiffHopController {
 
   private shortRef(ref: string): string {
     return ref.slice(0, 8);
+  }
+
+  private isFileNotFoundError(error: unknown): boolean {
+    if (error instanceof Error) {
+      const message = error.message.toLowerCase();
+      return message.includes("file was not found") || message.includes("not found");
+    }
+
+    if (typeof error === "string") {
+      const message = error.toLowerCase();
+      return message.includes("file was not found") || message.includes("not found");
+    }
+
+    return false;
   }
 
   private formatDiffTitle(fileUri: vscode.Uri, left: string, right: string): string {
