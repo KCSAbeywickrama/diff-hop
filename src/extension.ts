@@ -4,6 +4,7 @@ import type { API, Commit, GitExtension, Repository } from "./git";
 
 type Direction = "previous" | "next";
 type ContextMode = "commit-vs-commit" | "commit-vs-working";
+type OpenCommitDiffResult = "opened" | "no-left-side" | "error";
 
 interface DiffContext {
   fileUri: vscode.Uri;
@@ -151,8 +152,13 @@ class DiffHopController {
       if (!targetCommit) {
         return;
       }
-      const opened = await this.openCommitDiff(context.fileUri, targetCommit);
-      if (!opened) {
+      const result = await this.openCommitDiff(context.fileUri, targetCommit);
+      if (result === "no-left-side") {
+        void vscode.window.showInformationMessage("Diff Hop: reached the beginning of comparable history for this file.");
+        return;
+      }
+
+      if (result === "error") {
         return;
       }
     }
@@ -179,9 +185,9 @@ class DiffHopController {
     return this.isWorkingTreeAnchored(context) ? -1 : undefined;
   }
 
-  private async openCommitDiff(fileUri: vscode.Uri, commit: Commit): Promise<boolean> {
+  private async openCommitDiff(fileUri: vscode.Uri, commit: Commit): Promise<OpenCommitDiffResult> {
     if (!this.gitApi) {
-      return false;
+      return "error";
     }
 
     const right = this.gitApi.toGitUri(fileUri, commit.hash);
@@ -189,10 +195,7 @@ class DiffHopController {
     const rightRef = this.shortRef(commit.hash);
 
     if (!parent) {
-      const left = await this.createEmptyUri();
-      const title = this.formatDiffTitle(fileUri, "empty", rightRef);
-      await vscode.commands.executeCommand("vscode.diff", left, right, title, { preview: false });
-      return true;
+      return "no-left-side";
     }
 
     const parentLeft = this.gitApi.toGitUri(fileUri, parent);
@@ -200,33 +203,21 @@ class DiffHopController {
     try {
       await vscode.workspace.openTextDocument(parentLeft);
     } catch {
-      const left = await this.createEmptyUri();
-      const title = this.formatDiffTitle(fileUri, "empty", rightRef);
-      await vscode.commands.executeCommand("vscode.diff", left, right, title, { preview: false });
-      return true;
+      return "no-left-side";
     }
 
     try {
       const title = this.formatDiffTitle(fileUri, this.shortRef(parent), rightRef);
       await vscode.commands.executeCommand("vscode.diff", parentLeft, right, title, { preview: false });
-      return true;
+      return "opened";
     } catch (error) {
       if (!this.isFileNotFoundError(error)) {
         void vscode.window.showInformationMessage("Diff Hop: unable to open commit diff.");
-        return false;
+        return "error";
       }
     }
 
-    // File may not exist in parent at this path (e.g., added file/rename); fall back to empty left side.
-    try {
-      const left = await this.createEmptyUri();
-      const title = this.formatDiffTitle(fileUri, "empty", rightRef);
-      await vscode.commands.executeCommand("vscode.diff", left, right, title, { preview: false });
-      return true;
-    } catch {
-      void vscode.window.showInformationMessage("Diff Hop: unable to open older commit for this file.");
-      return false;
-    }
+    return "no-left-side";
   }
 
   private async openWorkingTreeDiff(fileUri: vscode.Uri): Promise<void> {
@@ -237,11 +228,6 @@ class DiffHopController {
     const left = this.gitApi.toGitUri(fileUri, "HEAD");
     const title = this.formatDiffTitle(fileUri, "HEAD", "working tree");
     await vscode.commands.executeCommand("vscode.diff", left, fileUri, title, { preview: false });
-  }
-
-  private async createEmptyUri(): Promise<vscode.Uri> {
-    const doc = await vscode.workspace.openTextDocument({ content: "" });
-    return doc.uri;
   }
 
   private async createContextFromActiveDiff(): Promise<DiffContext | undefined> {
