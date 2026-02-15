@@ -60,7 +60,6 @@ class DiffHopController {
   private gitApi: API | undefined;
   private gitUnavailableNotified = false;
   private currentContext: DiffContext | undefined;
-  private workingTreeAnchorKey: string | undefined;
 
   public async initialize(): Promise<void> {
     this.gitApi = await this.tryGetGitApi();
@@ -101,7 +100,6 @@ class DiffHopController {
 
     if (!this.gitApi) {
       this.currentContext = undefined;
-      this.workingTreeAnchorKey = undefined;
       await this.updateContextKeys(false, false, false);
       return;
     }
@@ -110,16 +108,8 @@ class DiffHopController {
     this.currentContext = context;
 
     if (!context) {
-      this.workingTreeAnchorKey = undefined;
       await this.updateContextKeys(false, false, false);
       return;
-    }
-
-    const contextKey = this.getContextKey(context.repoRoot, context.fileUri);
-    if (context.mode === "commit-vs-working") {
-      this.workingTreeAnchorKey = contextKey;
-    } else if (this.workingTreeAnchorKey !== contextKey) {
-      this.workingTreeAnchorKey = undefined;
     }
 
     await this.updateContextKeys(true, context.canPrev, context.canNext);
@@ -143,7 +133,6 @@ class DiffHopController {
         return;
       }
       this.currentContext = context;
-      this.workingTreeAnchorKey = this.getContextKey(context.repoRoot, context.fileUri);
     }
 
     if (direction === "previous" && !context.canPrev) {
@@ -269,7 +258,7 @@ class DiffHopController {
       return context.currentIndex - 1;
     }
 
-    return this.isWorkingTreeAnchored(context) ? -1 : undefined;
+    return undefined;
   }
 
   private async openCommitDiff(fileUri: vscode.Uri, commit: Commit, repoRoot?: string): Promise<OpenCommitDiffResult> {
@@ -583,15 +572,7 @@ class DiffHopController {
       return false;
     }
 
-    if (context.currentIndex > 0) {
-      return true;
-    }
-
-    return this.isWorkingTreeAnchored(context);
-  }
-
-  private isWorkingTreeAnchored(context: DiffContext): boolean {
-    return this.workingTreeAnchorKey === this.getContextKey(context.repoRoot, context.fileUri);
+    return context.currentIndex > 0;
   }
 
   private getContextKey(repoRoot: string, fileUri: vscode.Uri): string {
@@ -707,28 +688,7 @@ class DiffHopController {
       return vscode.Uri.file(mappedPath);
     }
 
-    const mappedFromAliases = this.findMappedPathFromAliases(repoRoot, hash);
-    if (mappedFromAliases) {
-      return vscode.Uri.file(mappedFromAliases);
-    }
-
     return fallbackFileUri;
-  }
-
-  private findMappedPathFromAliases(repoRoot: string, hash: string): string | undefined {
-    const repoPrefix = `${repoRoot}|`;
-    for (const [key, entry] of this.followCache.entries()) {
-      if (!key.startsWith(repoPrefix)) {
-        continue;
-      }
-
-      const mapped = entry.pathsByHash[hash];
-      if (mapped) {
-        return mapped;
-      }
-    }
-
-    return undefined;
   }
 
   private cacheFollowResult(repoRoot: string, primaryFilePath: string, entry: FollowCacheEntry): void {
