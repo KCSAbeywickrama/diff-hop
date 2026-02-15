@@ -635,13 +635,21 @@ class DiffHopController {
       const parsedFollow = this.parseFollowLog(followOutput, relativePath, context.repoRoot);
       const followHashes = parsedFollow.hashes;
       if (followHashes.length === 0) {
-        this.followCache.set(cacheKey, { commits: context.commits, pathsByHash: {}, ts: Date.now() });
+        this.cacheFollowResult(context.repoRoot, context.fileUri.fsPath, {
+          commits: context.commits,
+          pathsByHash: {},
+          ts: Date.now()
+        });
         return context.commits;
       }
 
       const mergedCommits = await this.mergeFollowCommits(context.commits, followHashes, context.repoRoot);
       const mergedPaths = this.buildMergedPathMap(mergedCommits, parsedFollow.pathsByHash);
-      this.followCache.set(cacheKey, { commits: mergedCommits, pathsByHash: mergedPaths, ts: Date.now() });
+      this.cacheFollowResult(context.repoRoot, context.fileUri.fsPath, {
+        commits: mergedCommits,
+        pathsByHash: mergedPaths,
+        ts: Date.now()
+      });
       return mergedCommits;
     } catch {
       void vscode.window.showInformationMessage("Diff Hop: Unable to extend history across renames.");
@@ -695,11 +703,41 @@ class DiffHopController {
 
     const cacheKey = this.getContextKey(repoRoot, fallbackFileUri);
     const mappedPath = this.followCache.get(cacheKey)?.pathsByHash[hash];
-    if (!mappedPath) {
-      return fallbackFileUri;
+    if (mappedPath) {
+      return vscode.Uri.file(mappedPath);
     }
 
-    return vscode.Uri.file(mappedPath);
+    const mappedFromAliases = this.findMappedPathFromAliases(repoRoot, hash);
+    if (mappedFromAliases) {
+      return vscode.Uri.file(mappedFromAliases);
+    }
+
+    return fallbackFileUri;
+  }
+
+  private findMappedPathFromAliases(repoRoot: string, hash: string): string | undefined {
+    const repoPrefix = `${repoRoot}|`;
+    for (const [key, entry] of this.followCache.entries()) {
+      if (!key.startsWith(repoPrefix)) {
+        continue;
+      }
+
+      const mapped = entry.pathsByHash[hash];
+      if (mapped) {
+        return mapped;
+      }
+    }
+
+    return undefined;
+  }
+
+  private cacheFollowResult(repoRoot: string, primaryFilePath: string, entry: FollowCacheEntry): void {
+    this.followCache.set(`${repoRoot}|${primaryFilePath}`, entry);
+
+    const uniquePaths = new Set<string>(Object.values(entry.pathsByHash));
+    for (const filePath of uniquePaths) {
+      this.followCache.set(`${repoRoot}|${filePath}`, entry);
+    }
   }
 
   private async runGitFollowLog(repoRoot: string, relativePath: string): Promise<string> {
