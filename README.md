@@ -2,8 +2,8 @@
 
 Diff Hop is a lightweight VS Code extension that adds commit navigation arrows to Git diffs.
 
-- `◀` jumps to an older commit diff for the same file.
-- `▶` jumps to a newer commit diff for the same file.
+- `←` jumps to an older commit diff for the same file.
+- `→` jumps to a newer commit diff for the same file.
 
 It is intentionally minimal:
 - No webviews
@@ -49,8 +49,8 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 - Open tracked file.
 - Open Timeline and click a commit diff.
 - Confirm arrows appear in editor title.
-- Click `◀` repeatedly and confirm older commit diffs open.
-- Click `▶` and confirm navigation returns toward newer commits.
+- Click `←` repeatedly and confirm older commit diffs open.
+- Click `→` and confirm navigation returns toward newer commits.
 
 2. Non-diff editor fallback
 - Open a regular file editor.
@@ -59,7 +59,7 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 - Confirm a diff opens for that file history in the current editor group.
 
 3. Direction changes
-- Navigate several steps with `◀` and `▶`.
+- Navigate several steps with `←` and `→`.
 - Confirm direction changes do not crash and continue on the active diff navigation flow.
 
 4. Multi-root workspace
