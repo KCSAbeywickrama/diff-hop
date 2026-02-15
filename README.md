@@ -23,7 +23,7 @@ These commands are available in the Command Palette and in the editor title tool
 2. When the active editor is a supported Git diff, arrows appear in the editor title.
 3. Use arrows or commands to move through commit diffs for the same file.
 
-Outside a diff editor, running a Diff Hop command uses the active file as the baseline and starts from HEAD vs working tree navigation.
+Outside a diff editor, running a Diff Hop command uses the active file as the baseline and starts commit history navigation for that file.
 
 ## Behavior details
 
@@ -31,7 +31,10 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 - It resolves the correct repository in multi-root workspaces using `api.getRepository(fileUri)`.
 - It reads commit history for that file (`repo.log`) with a small 10-second cache.
 - At path-history boundaries, it can lazily extend history across renames via `git log --follow` after explicit confirmation.
+- Rename-follow results are cached per file (per repo) for the current VS Code session.
 - Navigation opens diffs via `vscode.diff` + `api.toGitUri`.
+- `Next` stops at the newest commit boundary and shows a notification.
+- If opened from a normal editor, the first Diff Hop navigation opens a diff tab in the current editor group. Subsequent navigation reuses diff-preview flow.
 
 ## Limitations (MVP)
 
@@ -53,12 +56,11 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 - Open a regular file editor.
 - Confirm arrows are hidden.
 - Run `Git: Previous Commit (Diff Hop)`.
-- Confirm a diff opens for that file history.
+- Confirm a diff opens for that file history in the current editor group.
 
-3. Working tree comparison
-- Open a `HEAD` vs working tree diff for a file.
-- Confirm `◀` opens commit-vs-parent history.
-- Confirm `▶` can return to `HEAD` vs working tree when at newest commit boundary.
+3. Direction changes
+- Navigate several steps with `◀` and `▶`.
+- Confirm direction changes do not crash and continue on the active diff navigation flow.
 
 4. Multi-root workspace
 - Open two repos in one workspace.
@@ -68,7 +70,7 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 5. Boundary conditions
 - At oldest path-history boundary: prompt offers `Extend Across Renames`; dismiss keeps current boundary.
 - If rename-extension adds no commits: friendly message is shown and no crash occurs.
-- At newest working-tree position: next action does nothing and does not crash.
+- At newest commit boundary: next action shows boundary notification and does not open extra history tabs.
 - At comparable-history beginning: previous action stops and does not crash.
 
 6. Git disabled

@@ -3,7 +3,12 @@
   "displayName": "Diff Hop",
   "description": "Lightweight commit-to-commit diff navigation for VS Code Git diffs.",
   "version": "0.0.1",
-  "publisher": "chamoda",
+  "publisher": "Chamod Abeywickrama",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KCSAbeywickrama/diff-hop.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
