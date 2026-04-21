@@ -4,7 +4,7 @@
   "description": "Lightweight commit-to-commit diff navigation for VS Code Git diffs.",
   "version": "0.0.1",
   "publisher": "chamod-abeywickrama",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "https://github.com/KCSAbeywickrama/diff-hop.git"
