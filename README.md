@@ -33,6 +33,7 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 - At path-history boundaries, it can lazily extend history across renames via `git log --follow` after explicit confirmation.
 - Rename-follow results are cached per file (per repo) for the current VS Code session.
 - Navigation opens diffs via `vscode.diff` + `api.toGitUri`.
+- When hopping through history, the extension attempts to preserve the current cursor/viewport context instead of always revealing the first diff block.
 - `Next` stops at the newest commit boundary and shows a notification.
 - If opened from a normal editor, the first Diff Hop navigation opens a diff tab in the current editor group. Subsequent navigation reuses diff-preview flow.
 
@@ -61,6 +62,7 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 3. Direction changes
 - Navigate several steps with `←` and `→`.
 - Confirm direction changes do not crash and continue on the active diff navigation flow.
+- Confirm the newly opened diff stays near the current cursor or visible scroll position rather than jumping to the first hunk.
 
 4. Multi-root workspace
 - Open two repos in one workspace.
@@ -72,6 +74,7 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 - If rename-extension adds no commits: friendly message is shown and no crash occurs.
 - At newest commit boundary: next action shows boundary notification and does not open extra history tabs.
 - At comparable-history beginning: previous action stops and does not crash.
+- When the current anchor line is outside the next revision's bounds, the new diff clamps to the nearest valid line without errors.
 
 6. Git disabled
 - Disable built-in Git extension.

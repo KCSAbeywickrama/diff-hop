@@ -38,6 +38,19 @@ interface HistoryCursor {
   canExtendAcrossRenames: boolean;
 }
 
+type DiffSide = "original" | "modified";
+
+interface NavigationSnapshot {
+  anchorLine: number;
+  cursorCharacter: number;
+  cursorLine: number;
+  preferredSide: DiffSide;
+  sourceFileUri: string;
+  viewportAnchorLine: number;
+  visibleEndLine: number;
+  visibleStartLine: number;
+}
+
 interface FollowCacheEntry {
   commits: Commit[];
   pathsByHash: Record<string, string>;
@@ -135,8 +148,10 @@ class DiffHopController {
       this.currentContext = context;
     }
 
+    const navigationSnapshot = this.captureNavigationSnapshot(context.fileUri);
+
     if (direction === "previous" && !context.canPrev) {
-      await this.maybeOfferFollowAndRetry(context);
+      await this.maybeOfferFollowAndRetry(context, navigationSnapshot);
       return;
     }
 
@@ -148,7 +163,7 @@ class DiffHopController {
     const target = this.resolveTargetIndex(context, direction);
     if (target === undefined) {
       if (direction === "previous") {
-        await this.maybeOfferFollowAndRetry(context);
+        await this.maybeOfferFollowAndRetry(context, navigationSnapshot);
       } else {
         void vscode.window.showInformationMessage("Diff Hop: reached the newest side of history for this file.");
       }
@@ -157,6 +172,7 @@ class DiffHopController {
 
     if (target === -1) {
       await this.openWorkingTreeDiff(context.fileUri);
+      await this.restoreEditorContextAfterOpen(navigationSnapshot);
     } else {
       const targetCommit = context.commits[target];
       if (!targetCommit) {
@@ -164,19 +180,26 @@ class DiffHopController {
       }
       const result = await this.openCommitDiff(context.fileUri, targetCommit, context.repoRoot);
       if (result === "no-left-side") {
-        await this.maybeOfferFollowAndRetry(context);
+        await this.maybeOfferFollowAndRetry(context, navigationSnapshot);
         return;
       }
 
       if (result === "error") {
         return;
       }
+
+      if (result === "opened") {
+        await this.restoreEditorContextAfterOpen(navigationSnapshot);
+      }
     }
 
     await this.refreshContext();
   }
 
-  private async maybeOfferFollowAndRetry(context: DiffContext): Promise<void> {
+  private async maybeOfferFollowAndRetry(
+    context: DiffContext,
+    navigationSnapshot: NavigationSnapshot | undefined
+  ): Promise<void> {
     if (context.mode !== "commit-vs-commit" && context.mode !== "commit-vs-working") {
       return;
     }
@@ -232,6 +255,7 @@ class DiffHopController {
 
     const result = await this.openCommitDiff(context.fileUri, nextCommit, context.repoRoot);
     if (result === "opened") {
+      await this.restoreEditorContextAfterOpen(navigationSnapshot);
       await this.refreshContext();
       return;
     }
@@ -426,6 +450,145 @@ class DiffHopController {
     }
 
     return undefined;
+  }
+
+  private captureNavigationSnapshot(fileUri: vscode.Uri): NavigationSnapshot | undefined {
+    const activeEditor = vscode.window.activeTextEditor;
+    const diffPair = this.getActiveDiffPair();
+    if (!activeEditor) {
+      return undefined;
+    }
+
+    const sourceFileUri = this.resolveSourceFileUri(activeEditor.document.uri) ?? fileUri;
+    if (sourceFileUri.toString() !== fileUri.toString()) {
+      return undefined;
+    }
+
+    const preferredSide = this.resolvePreferredDiffSide(activeEditor.document.uri, diffPair);
+    const selection = activeEditor.selection.active;
+    const visibleRange = activeEditor.visibleRanges[0];
+    const fallbackLine = selection.line;
+    const visibleStartLine = visibleRange?.start.line ?? fallbackLine;
+    const visibleEndLine = Math.max(visibleRange?.end.line ?? fallbackLine, visibleStartLine);
+    const cursorIsVisible = selection.line >= visibleStartLine && selection.line <= visibleEndLine;
+    const viewportAnchorLine = visibleStartLine + Math.floor((visibleEndLine - visibleStartLine) / 2);
+
+    return {
+      anchorLine: cursorIsVisible ? selection.line : viewportAnchorLine,
+      cursorCharacter: selection.character,
+      cursorLine: selection.line,
+      preferredSide,
+      sourceFileUri: sourceFileUri.toString(),
+      viewportAnchorLine,
+      visibleEndLine,
+      visibleStartLine
+    };
+  }
+
+  private resolvePreferredDiffSide(
+    activeUri: vscode.Uri,
+    diffPair: { original: vscode.Uri; modified: vscode.Uri } | undefined
+  ): DiffSide {
+    if (!diffPair) {
+      return "modified";
+    }
+
+    if (activeUri.toString() === diffPair.original.toString()) {
+      return "original";
+    }
+
+    if (activeUri.toString() === diffPair.modified.toString()) {
+      return "modified";
+    }
+
+    return "modified";
+  }
+
+  private resolveSourceFileUri(uri: vscode.Uri): vscode.Uri | undefined {
+    if (uri.scheme === "file") {
+      return uri;
+    }
+
+    if (uri.scheme === "git") {
+      return this.parseGitUri(uri).fileUri;
+    }
+
+    return undefined;
+  }
+
+  private async restoreEditorContextAfterOpen(snapshot: NavigationSnapshot | undefined): Promise<void> {
+    if (!snapshot) {
+      return;
+    }
+
+    const editor = await this.findVisibleEditorForDiffSide(snapshot);
+    if (!editor) {
+      return;
+    }
+
+    const targetLine = this.clampLine(snapshot.anchorLine, editor.document.lineCount);
+    const targetCharacter = this.clampCharacter(targetLine, snapshot.cursorCharacter, editor.document);
+    const position = new vscode.Position(targetLine, targetCharacter);
+    const range = new vscode.Range(position, position);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+  }
+
+  private async findVisibleEditorForDiffSide(
+    snapshot: NavigationSnapshot
+  ): Promise<vscode.TextEditor | undefined> {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const diffPair = this.getActiveDiffPair();
+      const sourceMatches = diffPair
+        ? this.diffPairMatchesSource(diffPair, snapshot.sourceFileUri)
+        : false;
+
+      if (diffPair && sourceMatches) {
+        const preferredEditor = this.findEditorByUri(
+          snapshot.preferredSide === "original" ? diffPair.original : diffPair.modified
+        );
+        if (preferredEditor) {
+          return preferredEditor;
+        }
+
+        const fallbackEditor = this.findEditorByUri(diffPair.modified) ?? this.findEditorByUri(diffPair.original);
+        if (fallbackEditor) {
+          return fallbackEditor;
+        }
+      }
+
+      await this.delay(40);
+    }
+
+    return undefined;
+  }
+
+  private diffPairMatchesSource(diffPair: { original: vscode.Uri; modified: vscode.Uri }, sourceFileUri: string): boolean {
+    const originalSource = this.resolveSourceFileUri(diffPair.original)?.toString();
+    const modifiedSource = this.resolveSourceFileUri(diffPair.modified)?.toString();
+    return originalSource === sourceFileUri || modifiedSource === sourceFileUri;
+  }
+
+  private findEditorByUri(uri: vscode.Uri): vscode.TextEditor | undefined {
+    const target = uri.toString();
+    return vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === target);
+  }
+
+  private clampLine(line: number, lineCount: number): number {
+    if (lineCount <= 0) {
+      return 0;
+    }
+
+    return Math.max(0, Math.min(line, lineCount - 1));
+  }
+
+  private clampCharacter(line: number, character: number, document: vscode.TextDocument): number {
+    const targetLine = document.lineAt(line);
+    return Math.max(0, Math.min(character, targetLine.text.length));
+  }
+
+  private async delay(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private async resolveRepoAndCommits(fileUri: vscode.Uri): Promise<{ repo: Repository; commits: Commit[] } | undefined> {
