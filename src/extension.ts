@@ -130,8 +130,8 @@ class DiffHopController {
         false,
         false,
         false,
-        Boolean(leftCommitAvailable),
-        Boolean(rightCommitAvailable)
+        leftCommitAvailable,
+        rightCommitAvailable
       );
       return;
     }
@@ -140,8 +140,8 @@ class DiffHopController {
       true,
       context.canPrev,
       context.canNext,
-      Boolean(leftCommitAvailable),
-      Boolean(rightCommitAvailable)
+      leftCommitAvailable,
+      rightCommitAvailable
     );
   }
 
