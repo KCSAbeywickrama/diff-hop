@@ -115,34 +115,20 @@ class DiffHopController {
 
     if (!this.gitApi) {
       this.currentContext = undefined;
-      await this.updateContextKeys(false, false, false, false, false);
+      await this.updateContextKeys(false, false, false);
       return;
     }
 
     const diffPair = this.getActiveDiffPair();
     const context = await this.createContextFromActiveDiff(diffPair);
     this.currentContext = context;
-    const leftCommitAvailable = diffPair?.original.scheme === "git";
-    const rightCommitAvailable = diffPair?.modified.scheme === "git";
 
     if (!context) {
-      await this.updateContextKeys(
-        false,
-        false,
-        false,
-        leftCommitAvailable,
-        rightCommitAvailable
-      );
+      await this.updateContextKeys(false, false, false);
       return;
     }
 
-    await this.updateContextKeys(
-      true,
-      context.canPrev,
-      context.canNext,
-      leftCommitAvailable,
-      rightCommitAvailable
-    );
+    await this.updateContextKeys(true, context.canPrev, context.canNext);
   }
 
   private async navigate(direction: Direction): Promise<void> {
@@ -353,7 +339,7 @@ class DiffHopController {
     await this.refreshContext();
     const diffPair = this.getActiveDiffPair();
     const targetUri = side === "left" ? diffPair?.original : diffPair?.modified;
-    const hash = targetUri?.scheme === "git" ? this.normalizeRef(this.parseGitUri(targetUri).ref ?? "") : undefined;
+    const hash = this.resolveCommitHashForSide(side, targetUri);
     if (!hash) {
       void vscode.window.showInformationMessage(`Diff Hop: no ${side} commit hash is available in the active diff.`);
       return;
@@ -691,6 +677,28 @@ class DiffHopController {
     return { fileUri, ref };
   }
 
+  private resolveCommitHashForSide(side: "left" | "right", targetUri: vscode.Uri | undefined): string | undefined {
+    if (targetUri?.scheme === "git") {
+      return this.normalizeRef(this.parseGitUri(targetUri).ref ?? "");
+    }
+
+    const context = this.currentContext;
+    if (!context || context.mode !== "commit-vs-commit") {
+      return undefined;
+    }
+
+    const currentHash = context.currentCommitHash ? this.normalizeRef(context.currentCommitHash) : undefined;
+    if (side === "right") {
+      return currentHash;
+    }
+
+    if (context.currentIndex < 0) {
+      return undefined;
+    }
+
+    return context.commits[context.currentIndex]?.parents[0];
+  }
+
   private decodeQuery(rawQuery: string): string {
     if (!rawQuery) {
       return "";
@@ -1019,18 +1027,10 @@ class DiffHopController {
     };
   }
 
-  private async updateContextKeys(
-    active: boolean,
-    canPrev: boolean,
-    canNext: boolean,
-    leftCommitAvailable: boolean,
-    rightCommitAvailable: boolean
-  ): Promise<void> {
+  private async updateContextKeys(active: boolean, canPrev: boolean, canNext: boolean): Promise<void> {
     await vscode.commands.executeCommand("setContext", "diffHop.active", active);
     await vscode.commands.executeCommand("setContext", "diffHop.canPrev", canPrev);
     await vscode.commands.executeCommand("setContext", "diffHop.canNext", canNext);
-    await vscode.commands.executeCommand("setContext", "diffHop.leftCommitAvailable", leftCommitAvailable);
-    await vscode.commands.executeCommand("setContext", "diffHop.rightCommitAvailable", rightCommitAvailable);
   }
 
   private async tryGetGitApi(): Promise<API | undefined> {

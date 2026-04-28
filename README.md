@@ -90,6 +90,8 @@ Outside a diff editor, running a Diff Hop command uses the active file as the ba
 npm install
 npm run compile
 npm run package
+npm run install-local
 ```
 
 `npm run package` uses `vsce package` and produces a `.vsix`.
+`npm run install-local` compiles, packages, and installs the generated `.vsix` into local VS Code via the `code` CLI with `--force`, so `code` must be available on your `PATH`.

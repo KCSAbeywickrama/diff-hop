@@ -58,16 +58,6 @@
           "command": "diffHop.nextCommit",
           "group": "navigation@10",
           "when": "resourceScheme == git && diffHop.active"
-        },
-        {
-          "command": "diffHop.copyLeftCommitHash",
-          "group": "navigation@11",
-          "when": "diffHop.leftCommitAvailable"
-        },
-        {
-          "command": "diffHop.copyRightCommitHash",
-          "group": "navigation@12",
-          "when": "diffHop.rightCommitAvailable"
         }
       ]
     }
@@ -75,7 +65,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package"
+    "package": "vsce package",
+    "install-local": "npm run compile && npm run package && code --install-extension \"$npm_package_name-$npm_package_version.vsix\" --force"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
