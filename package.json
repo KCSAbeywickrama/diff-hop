@@ -20,6 +20,8 @@
   "activationEvents": [
     "onCommand:diffHop.previousCommit",
     "onCommand:diffHop.nextCommit",
+    "onCommand:diffHop.copyLeftCommitHash",
+    "onCommand:diffHop.copyRightCommitHash",
     "onStartupFinished"
   ],
   "contributes": {
@@ -33,6 +35,16 @@
         "command": "diffHop.nextCommit",
         "title": "Git: Next Commit (Diff Hop)",
         "icon": "$(arrow-right)"
+      },
+      {
+        "command": "diffHop.copyLeftCommitHash",
+        "title": "Git: Copy Left Commit Hash (Diff Hop)",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "diffHop.copyRightCommitHash",
+        "title": "Git: Copy Right Commit Hash (Diff Hop)",
+        "icon": "$(copy)"
       }
     ],
     "menus": {
@@ -46,6 +58,16 @@
           "command": "diffHop.nextCommit",
           "group": "navigation@10",
           "when": "resourceScheme == git && diffHop.active"
+        },
+        {
+          "command": "diffHop.copyLeftCommitHash",
+          "group": "navigation@11",
+          "when": "diffHop.leftCommitAvailable"
+        },
+        {
+          "command": "diffHop.copyRightCommitHash",
+          "group": "navigation@12",
+          "when": "diffHop.rightCommitAvailable"
         }
       ]
     }
